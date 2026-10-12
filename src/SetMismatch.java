@@ -3,38 +3,41 @@
  * Copyright (c) 2017‐2026 All Rights Reserved.
  */
 
-import java.util.Arrays;
-
 /**
+ * 645. Set Mismatch (Easy)
+ * https://leetcode.com/problems/set-mismatch/
+ *
  * @author Timothy Julian
- * @version $Id: SetMismatch.java, v 0.1 2026‐05‐25 22.29 timothy.julian Exp $$
+ * @version $Id: SetMismatch.java, v 0.1 2026‐09‐23 11.57 timothy.julian Exp $$
  */
 public class SetMismatch {
 
     public SetMismatch() {
-        System.out.println(Arrays.toString(findErrorNums(new int[]{1,2,2,4})));
-        System.out.println(Arrays.toString(findErrorNums(new int[]{1,1})));
-        System.out.println(Arrays.toString(findErrorNums(new int[]{3,2,3,4,6,5})));
+        Judge j = new Judge();
+        j.check("[2,3]", findErrorNums(new int[]{1, 2, 2, 4}));
+        j.check("[1,2]", findErrorNums(new int[]{1, 1}));
+        j.done();
     }
 
+    // ==== leetcode:begin ====
     public int[] findErrorNums(int[] nums) {
-        int[] count = new int[nums.length];
         int[] ans = new int[2];
+
+        int[] table = new int[nums.length];
         for (int i = 0; i < nums.length; i++) {
-            count[nums[i]-1]++;
+            table[nums[i]-1]++;
         }
-        for (int i = 0; i < count.length; i++) {
-            if (count[i] == 2) {
-                ans[0] = i+1;
-            } else if (count[i] == 0) {
-                ans[1] = i+1;
+        for (int i = 0; i < nums.length; i++) {
+            if (table[i] == 0) {
+                ans[1] = i + 1;
+            } else if (table[i] == 2) {
+                ans[0] = i+ 1;
             }
         }
-//        System.out.println(Arrays.toString(count));
 
         return ans;
     }
-
+    // ==== leetcode:end ====
 
     public static void main(String[] args) {
         new SetMismatch();
