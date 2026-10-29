@@ -206,13 +206,36 @@ def cmd_copy(cls):
     sol = "class Solution {\n%s\n}" % body
     print(sol)
     try:
-        subprocess.run(["pbcopy"], input=sol.encode())
+        command, encoding = (["clip.exe"], "utf-16-le") if os.name == "nt" else (["pbcopy"], "utf-8")
+        subprocess.run(command, input=sol.encode(encoding), check=True)
         print("\n-- copied to clipboard --", file=sys.stderr)
-    except FileNotFoundError:
-        pass
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        print("\n-- clipboard unavailable: %s --" % exc, file=sys.stderr)
 
 
 def cmd_selftest(_=None):
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
+    from unittest.mock import mock_open, patch
+
+    source = BEGIN + "\n    // Unicode: \u2713\n" + END
+    solution = "class Solution {\n    // Unicode: \u2713\n}"
+    for platform, command, encoding in (("nt", "clip.exe", "utf-16-le"), ("posix", "pbcopy", "utf-8")):
+        with patch("builtins.open", mock_open(read_data=source)), \
+             patch.object(os, "name", platform), patch.object(subprocess, "run") as run, \
+             redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()) as stderr:
+            cmd_copy("Example")
+            run.assert_called_once_with([command], input=solution.encode(encoding), check=True)
+            assert not run.call_args.kwargs["input"].startswith((b"\xff\xfe", b"\xfe\xff", b"\xef\xbb\xbf"))
+            assert stdout.getvalue() == solution + "\n"
+            assert "copied to clipboard" in stderr.getvalue()
+            run.side_effect = subprocess.CalledProcessError(1, command)
+            stderr.truncate(0)
+            stderr.seek(0)
+            cmd_copy("Example")
+            assert "clipboard unavailable" in stderr.getvalue()
+            assert "copied to clipboard" not in stderr.getvalue()
+
     assert slug_of("https://leetcode.com/problems/two-sum/?envType=x&envId=y") == "two-sum"
     assert slug_of("two-sum") == "two-sum"
     assert pascal("Pascal's Triangle") == "PascalsTriangle"

@@ -1,4 +1,6 @@
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 
 /**
@@ -6,7 +8,7 @@ import java.util.List;
  * https://leetcode.com/problems/largest-rectangle-in-histogram/
  *
  * @author Timothy Julian
- * @version $Id: LargestRectangleInHistogram.java, v 0.1 2026‐10‐23 15.08 timothy.julian Exp $$
+ * @version $Id: LargestRectangleInHistogram.java, v 0.1 2026‐10‐30 00.05 timothy.julian Exp $$
  */
 public class LargestRectangleInHistogram {
 
@@ -20,55 +22,23 @@ public class LargestRectangleInHistogram {
 
     // ==== leetcode:begin ====
     public int largestRectangleArea(int[] heights) {
-        int max = Integer.MIN_VALUE;
-        record Stack (int height, int index, int minimumHeightUntilThis, int maximumAreaUntilThis) {}
-        List<Stack> monotonicStackDown = new ArrayList<>();
-        for (int i = 0; i < heights.length; i++) {
-            int height = heights[i];
-            if (monotonicStackDown.isEmpty()) {
-                monotonicStackDown.add(new Stack(height, i, height, height));
-            } else if (height <= monotonicStackDown.getLast().height) {
-                Stack last = monotonicStackDown.getLast();
-                int minimumHeightUntilThis = Math.min(last.height, height);
-                int maximumAreUntilThis = Math.max(last.maximumAreaUntilThis, (monotonicStackDown.size() + 1) * minimumHeightUntilThis);
-                monotonicStackDown.add(new Stack(height, i, minimumHeightUntilThis, maximumAreUntilThis));
-            } else {
-                max = Math.max(monotonicStackDown.getLast().maximumAreaUntilThis, max);
-                monotonicStackDown.clear();
-                monotonicStackDown.add(new Stack(height, i, height, height));
+        Deque<Integer> monotonicStack = new ArrayDeque<>();
+        int max = 0;
+
+        for (int i = 0; i <= heights.length; i++) {
+            int height = i == heights.length ? 0 : heights[i];
+
+            while (!monotonicStack.isEmpty() && heights[monotonicStack.peekLast()] > height) {
+                int h = heights[monotonicStack.removeLast()];
+                int left = monotonicStack.isEmpty() ? -1 : monotonicStack.peekLast();
+                int area = h * (i - left - 1);
+                max = Math.max(max, area);
             }
-//            System.out.println(monotonicStackDown);
-//            System.out.println(max);
-        }
 
-        max = Math.max(monotonicStackDown.getLast().maximumAreaUntilThis, max);
-//        System.out.println(monotonicStackDown);
-//        System.out.println(max);
-//
-//        System.out.println("==split");
-
-        monotonicStackDown.clear();
-        for (int i = heights.length-1; i >= 0; i--) {
-            int height = heights[i];
-            if (monotonicStackDown.isEmpty()) {
-                monotonicStackDown.add(new Stack(height, i, height, height));
-            } else if (height <= monotonicStackDown.getLast().height) {
-                Stack last = monotonicStackDown.getLast();
-                int minimumHeightUntilThis = Math.min(last.height, height);
-                int maximumAreUntilThis = Math.max(last.maximumAreaUntilThis, (monotonicStackDown.size() + 1) * minimumHeightUntilThis);
-                monotonicStackDown.add(new Stack(height, i, minimumHeightUntilThis, maximumAreUntilThis));
-            } else {
-                max = Math.max(monotonicStackDown.getLast().maximumAreaUntilThis, max);
-                monotonicStackDown.clear();
-                monotonicStackDown.add(new Stack(height, i, height, height));
+            if (i < heights.length) {
+                monotonicStack.add(i);
             }
-//            System.out.println(monotonicStackDown);
-//            System.out.println(max);
         }
-
-        max = Math.max(monotonicStackDown.getLast().maximumAreaUntilThis, max);
-//        System.out.println(monotonicStackDown);
-//        System.out.println(max);
 
         return max;
     }
