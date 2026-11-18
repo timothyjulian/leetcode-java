@@ -3,14 +3,17 @@
 
   python3 leet.py new  <url|slug>   # fetch problem, write src/<Class>.java
   python3 leet.py run  <Class>      # javac + java (Java 8 ok)
-  python3 leet.py copy <Class>      # print `class Solution {...}` ready to paste back
+  python3 leet.py copy <Class>      # copy the submission class to the clipboard
   python3 leet.py selftest          # assert the parsing bits still work
 """
 import html, json, os, re, shutil, subprocess, sys, urllib.request
 from datetime import datetime
+from textwrap import dedent, indent
 
 SRC, OUT, BAK = "src", "out/leet", "out/leet-bak"
 BEGIN, END = "// ==== leetcode:begin ====", "// ==== leetcode:end ===="
+CLASS = r"(?:public\s+)?class\s+(\w+)\b"
+METHOD = r"\bpublic\s+([\w.<>\[\],\s]+?)\s+(\w+)\s*\(([^)]*)\)\s*\{"
 
 def fetch(slug):
     q = ("query q($titleSlug:String!){question(titleSlug:$titleSlug){questionFrontendId "
@@ -40,7 +43,7 @@ def pascal(title):
 def expected(content):
     """Pull the `Output:` line out of each example in the problem HTML."""
     outs = []
-    for raw in re.findall(r"<strong>Output:?\s*</strong>(.*?)(?:\n|</pre>)", content or "", re.S):
+    for raw in re.findall(r"<strong>Output:?\s*</strong>\s*(.*?)(?:\n|</pre>)", content or ""):
         outs.append(html.unescape(re.sub(r"<[^>]+>", "", raw)).replace("\xa0", " ").strip())
     return outs
 
@@ -89,6 +92,10 @@ def split_params(s):
     return [p.strip() for p in out]
 
 
+def param_types(raw):
+    return [p.rsplit(None, 1)[0] for p in split_params(raw)]
+
+
 def lit(t, v, top=True):
     """JSON value -> Java literal for declared type t."""
     t = t.strip()
@@ -120,9 +127,63 @@ def printer(ret, call):
     return "System.out.println(%s);" % call
 
 
+def design_calls(name, constructors, sigs, lines, outs):
+    signatures = {}
+    for ret, operation, params in [(None, name, raw) for raw in constructors or [""]] + sigs:
+        types = param_types(params)
+        signatures.setdefault((operation, len(types)), []).append((ret.strip() if ret else None, types))
+
+    if len(lines) % 2:
+        raise ValueError("expected pairs of operation and argument lists")
+    calls = []
+    for k, i in enumerate(range(0, len(lines), 2), 1):
+        ops, inputs = map(json.loads, lines[i:i + 2])
+        outputs = json.loads(outs[k - 1]) if k <= len(outs) and outs[k - 1] else None
+        if (not isinstance(ops, list) or not isinstance(inputs, list)
+                or not ops or ops[0] != name or len(ops) != len(inputs)):
+            raise ValueError("invalid operation sequence for %s" % name)
+        if outputs is not None and (not isinstance(outputs, list) or len(outputs) != len(ops)):
+            raise ValueError("expected one output per operation")
+
+        obj = "obj%d" % k
+        for j, (op, values) in enumerate(zip(ops, inputs)):
+            if not isinstance(op, str) or not isinstance(values, list):
+                raise ValueError("expected operation names and argument lists")
+            matches = signatures.get((op, len(values)), [])
+            if len(matches) != 1:
+                raise ValueError("cannot resolve %s with %d arguments" % (op, len(values)))
+            ret, types = matches[0]
+            args = ", ".join(lit(t, v) for t, v in zip(types, values))
+            if j == 0:
+                calls.append("%s %s = new %s(%s);" % (name, obj, name, args))
+            else:
+                call = "%s.%s(%s)" % (obj, op, args)
+                if ret != "void" and outputs is not None:
+                    calls.append("j.check(%s, %s);" % (json.dumps(java_str(outputs[j])), call))
+                else:
+                    calls.append(printer(ret, call))
+    return calls
+
+
+def fill_stub(method):
+    ret, name, params = method.groups()
+    if ret.strip() == "void":
+        return method[0]
+    return "public %s %s(%s) {\n        throw new UnsupportedOperationException();\n    }" % (ret, name, params)
+
+
 def cmd_new(arg, force=False):
     q = fetch(slug_of(arg))
     cls = pascal(q["title"])
+    snippet = next(c["code"] for c in q["codeSnippets"] if c["langSlug"] == "java")
+    declaration = re.search(r"^" + CLASS, snippet, re.M)
+    name = declaration[1] if declaration else None
+    constructors = []
+    if name:
+        constructors = re.findall(r"\bpublic\s+" + re.escape(name) + r"\s*\(([^)]*)\)\s*\{", snippet)
+    design = name is not None and (name != "Solution" or bool(constructors))
+    if design and cls == name:
+        cls += "Runner"
     path = os.path.join(SRC, cls + ".java")
     hit = collides(cls, os.listdir(SRC))
     if hit and not force:
@@ -139,18 +200,25 @@ def cmd_new(arg, force=False):
                 os.rename(os.path.join(SRC, hit), path)
         print("replaced src/%s  (backup: %s)" % (hit, bak), file=sys.stderr)
 
-    snippet = next(c["code"] for c in q["codeSnippets"] if c["langSlug"] == "java")
-    sigs = re.findall(r"public\s+([\w.<>\[\],\s]+?)\s+(\w+)\s*\(([^)]*)\)\s*\{", snippet)
+    sigs = re.findall(METHOD, snippet)
+    lines = [line for line in q["exampleTestcases"].splitlines() if line.strip()]
+    outs = expected(q.get("content"))
     calls, note = [], ""
 
-    if len(sigs) == 1:
+    if design:
+        body = re.sub(METHOD + r"\s*\}", fill_stub, snippet[declaration.start():].strip())
+        body = indent("static " + body, "    ")
+        try:
+            calls = design_calls(name, constructors, sigs, lines, outs)
+        except ValueError as exc:
+            print("warning: could not generate design examples: %s" % exc, file=sys.stderr)
+            note = "        // Add local example calls here.\n"
+    elif len(sigs) == 1:
         ret, name, raw = sigs[0]
         ret = ret.strip()
-        types = [p.rsplit(" ", 1)[0] for p in split_params(raw)]
+        types = param_types(raw)
         stub = "" if ret == "void" else "\n        throw new UnsupportedOperationException();"
         body = "    public %s %s(%s) {\n\n        // TODO%s\n    }" % (ret, name, raw, stub)
-        lines = [l for l in q["exampleTestcases"].split("\n") if l.strip()]
-        outs = expected(q.get("content"))
         n = max(len(types), 1)
         for k, i in enumerate(range(0, len(lines) - n + 1, n)):
             args = [lit(types[j], json.loads(lines[i + j])) for j in range(n)]
@@ -203,7 +271,10 @@ def cmd_copy(cls):
     if not m:
         sys.exit("no leetcode markers in %s" % cls)
     body = "\n".join(l.rstrip() for l in m.group(1).split("\n")).strip("\n")
-    sol = "class Solution {\n%s\n}" % body
+    if re.match(r"\s*static\s+" + CLASS, body):
+        sol = re.sub(r"^static\s+", "", dedent(body), count=1)
+    else:
+        sol = "class Solution {\n%s\n}" % body
     print(sol)
     try:
         command, encoding = (["clip.exe"], "utf-16-le") if os.name == "nt" else (["pbcopy"], "utf-8")
@@ -216,6 +287,7 @@ def cmd_copy(cls):
 def cmd_selftest(_=None):
     import io
     from contextlib import redirect_stdout, redirect_stderr
+    from tempfile import TemporaryDirectory
     from unittest.mock import mock_open, patch
 
     source = BEGIN + "\n    // Unicode: \u2713\n" + END
@@ -282,6 +354,29 @@ def cmd_selftest(_=None):
     assert expected("<pre><strong>Output:</strong> [[1],[1,1]]\n</pre>") == ["[[1],[1,1]]"]
     assert expected('<strong>Output:</strong> &quot;1[.]1&quot;</pre>') == ['"1[.]1"']
     assert expected(None) == []
+
+    snippet = ("class Counter {\n    public Counter(int start) {}\n"
+               "    public int next() {}\n}\n\n/** Usage notes. */\n")
+    case = '["Counter","next","next"]\n[[3],[],[]]\n'
+    output = '<pre><strong>Output</strong>\n[null,3,4]\n</pre>'
+    problem = {
+        "title": "Counter", "questionFrontendId": "1", "difficulty": "Easy",
+        "codeSnippets": [{"langSlug": "java", "code": snippet}],
+        "exampleTestcases": case * 2, "content": output * 2,
+    }
+    with TemporaryDirectory() as tmp, patch(__name__ + ".SRC", tmp), \
+         patch(__name__ + ".fetch", return_value=problem), patch.object(subprocess, "run"), \
+         redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()):
+        cmd_new("counter")
+        with open(os.path.join(tmp, "CounterRunner.java")) as generated:
+            source = generated.read()
+        assert "Counter obj1 = new Counter(3);" in source
+        assert 'j.check("4", obj2.next());' in source
+        cmd_copy("CounterRunner")
+        copied = stdout.getvalue().split("\n", 1)[1]
+        assert copied.startswith("class Counter {\n    public Counter(int start)")
+        assert "throw new UnsupportedOperationException();" in copied
+        assert copied.endswith("/** Usage notes. */\n")
 
     # end to end: types -> literals -> statement, mirrors cmd_new's inner loop
     assert printer("int", "searchInsert(%s, %s)" % (lit("int[]", [1, 3]), lit("int", 5))) \
